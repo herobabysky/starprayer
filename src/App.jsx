@@ -16,7 +16,11 @@ const DuaPrayerApp = () => {
   const [showInputModal, setShowInputModal] = useState(false);
   const [draggedStar, setDraggedStar] = useState(null);
   const [starPositions, setStarPositions] = useState({});
+  const [dragStartPos, setDragStartPos] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
   const textareaRef = useRef(null);
+
+  const DRAG_THRESHOLD = 8; // pixels - if moved less than this, it's a tap
 
   // Load duas from Firebase on mount - real-time listener
   useEffect(() => {
@@ -113,12 +117,9 @@ const DuaPrayerApp = () => {
     }, 5500);
   };
 
-  const handleStarClick = (e, star) => {
-    if (draggedStar) return;
-    e.stopPropagation();
-    const rect = e.currentTarget.getBoundingClientRect();
-
+  const handleStarTap = (star, rect) => {
     if (tappedStar === star.id) {
+      // Second tap - say Amin
       setAminPosition({
         x: rect.left + rect.width / 2,
         y: rect.top + rect.height / 2
@@ -128,43 +129,75 @@ const DuaPrayerApp = () => {
       setHoveredStar(null);
       setTimeout(() => setShowAmin(false), 2000);
     } else {
+      // First tap - show tooltip
       setTappedStar(star.id);
       setHoveredStar(star.id);
       setTimeout(() => {
-        if (tappedStar === star.id) {
-          setTappedStar(null);
-          setHoveredStar(null);
-        }
+        setTappedStar(prev => prev === star.id ? null : prev);
+        setHoveredStar(prev => prev === star.id ? null : prev);
       }, 5000);
     }
   };
 
-  // Drag handlers for stars
-  const handleDragStart = (e, star) => {
+  // Drag handlers for stars - with tap detection
+  const handlePointerDown = (e, star) => {
     e.stopPropagation();
+    const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
+    const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
+
     setDraggedStar(star.id);
-    setHoveredStar(null);
-    setTappedStar(null);
+    setDragStartPos({ x: clientX, y: clientY, starId: star.id });
+    setIsDragging(false);
   };
 
-  const handleDrag = (e, star) => {
-    if (draggedStar !== star.id) return;
-    e.preventDefault();
+  const handlePointerMove = (e) => {
+    if (!draggedStar || !dragStartPos) return;
 
     const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
     const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
 
-    const newX = (clientX / window.innerWidth) * 100;
-    const newY = (clientY / window.innerHeight) * 100;
+    // Calculate distance moved
+    const dx = clientX - dragStartPos.x;
+    const dy = clientY - dragStartPos.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
 
-    setStarPositions(prev => ({
-      ...prev,
-      [star.id]: { x: Math.max(2, Math.min(95, newX)), y: Math.max(2, Math.min(70, newY)) }
-    }));
+    // Only start actual dragging if moved past threshold
+    if (distance > DRAG_THRESHOLD) {
+      setIsDragging(true);
+      setHoveredStar(null);
+      setTappedStar(null);
+
+      e.preventDefault();
+
+      const newX = (clientX / window.innerWidth) * 100;
+      const newY = (clientY / window.innerHeight) * 100;
+
+      setStarPositions(prev => ({
+        ...prev,
+        [draggedStar]: { x: Math.max(2, Math.min(95, newX)), y: Math.max(2, Math.min(70, newY)) }
+      }));
+    }
   };
 
-  const handleDragEnd = () => {
+  const handlePointerUp = (e) => {
+    if (!draggedStar) return;
+
+    // If we didn't actually drag (just tapped), trigger tap action
+    if (!isDragging && dragStartPos) {
+      const starData = duaStars.find(s => s.id === draggedStar);
+      if (starData) {
+        // Get the star element's rect
+        const starElement = document.querySelector(`[data-star-id="${draggedStar}"]`);
+        if (starElement) {
+          const rect = starElement.getBoundingClientRect();
+          handleStarTap(starData, rect);
+        }
+      }
+    }
+
     setDraggedStar(null);
+    setDragStartPos(null);
+    setIsDragging(false);
   };
 
   const handleBackgroundClick = () => {
@@ -209,10 +242,10 @@ const DuaPrayerApp = () => {
     <div
       className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden"
       onClick={handleBackgroundClick}
-      onMouseMove={(e) => draggedStar && handleDrag(e, { id: draggedStar })}
-      onMouseUp={handleDragEnd}
-      onTouchMove={(e) => draggedStar && handleDrag(e, { id: draggedStar })}
-      onTouchEnd={handleDragEnd}
+      onMouseMove={handlePointerMove}
+      onMouseUp={handlePointerUp}
+      onTouchMove={handlePointerMove}
+      onTouchEnd={handlePointerUp}
     >
 
       {/* Star Counter */}
@@ -333,29 +366,29 @@ const DuaPrayerApp = () => {
         {/* DUA STARS - Draggable */}
         {duaStars.map((star) => {
           const pos = getStarPosition(star);
-          const isDragging = draggedStar === star.id;
+          const starIsDragging = isDragging && draggedStar === star.id;
           return (
             <div
               key={star.id}
+              data-star-id={star.id}
               className="absolute cursor-grab active:cursor-grabbing"
               style={{
                 top: pos.y + '%',
                 left: pos.x + '%',
-                zIndex: isDragging ? 100 : (hoveredStar === star.id ? 50 : 20),
-                animation: isDragging ? 'none' : `duaStarTwinkle ${2 + star.delay}s ease-in-out infinite`,
+                zIndex: starIsDragging ? 100 : (hoveredStar === star.id ? 50 : 20),
+                animation: starIsDragging ? 'none' : `duaStarTwinkle ${2 + star.delay}s ease-in-out infinite`,
                 animationDelay: star.delay + 's',
                 padding: '12px',
                 margin: '-12px',
                 touchAction: 'none',
                 userSelect: 'none'
               }}
-              onMouseEnter={() => !draggedStar && setHoveredStar(star.id)}
+              onMouseEnter={() => !isDragging && setHoveredStar(star.id)}
               onMouseLeave={() => {
-                if (!draggedStar && tappedStar !== star.id) setHoveredStar(null);
+                if (!isDragging && tappedStar !== star.id) setHoveredStar(null);
               }}
-              onClick={(e) => handleStarClick(e, star)}
-              onMouseDown={(e) => handleDragStart(e, star)}
-              onTouchStart={(e) => handleDragStart(e, star)}
+              onMouseDown={(e) => handlePointerDown(e, star)}
+              onTouchStart={(e) => handlePointerDown(e, star)}
             >
               <div
                 className="absolute rounded-full transition-all duration-300"
@@ -365,20 +398,20 @@ const DuaPrayerApp = () => {
                   top: '50%',
                   left: '50%',
                   transform: 'translate(-50%, -50%)',
-                  background: hoveredStar === star.id || isDragging
+                  background: hoveredStar === star.id || starIsDragging
                     ? 'radial-gradient(circle, rgba(251,191,36,0.5) 0%, rgba(251,191,36,0.2) 40%, transparent 70%)'
                     : 'radial-gradient(circle, rgba(251,191,36,0.25) 0%, transparent 60%)',
                   filter: 'blur(4px)',
-                  opacity: hoveredStar === star.id || isDragging ? 1 : 0.7
+                  opacity: hoveredStar === star.id || starIsDragging ? 1 : 0.7
                 }}
               />
 
               <div className="relative transition-all duration-300">
-                <StarShape size={star.size} isHovered={hoveredStar === star.id} isDragging={isDragging} />
+                <StarShape size={star.size} isHovered={hoveredStar === star.id} isDragging={starIsDragging} />
               </div>
 
               {/* Tooltip - improved positioning */}
-              {hoveredStar === star.id && !isDragging && (
+              {hoveredStar === star.id && !starIsDragging && (
                 <div
                   className="absolute z-50 pointer-events-none"
                   style={{
