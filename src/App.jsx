@@ -13,6 +13,9 @@ const DuaPrayerApp = () => {
   const [duaStars, setDuaStars] = useState([]);
   const [hoveredStar, setHoveredStar] = useState(null);
   const [totalDuas, setTotalDuas] = useState(0);
+  const [showInputModal, setShowInputModal] = useState(false);
+  const [draggedStar, setDraggedStar] = useState(null);
+  const [starPositions, setStarPositions] = useState({});
   const textareaRef = useRef(null);
 
   // Load duas from Firebase on mount - real-time listener
@@ -26,7 +29,6 @@ const DuaPrayerApp = () => {
           id: key,
           text: value.text,
           timestamp: value.timestamp,
-          // Use saved positions, or generate consistent ones based on ID
           x: value.x || (hashCode(key) % 80) + 5,
           y: value.y || ((hashCode(key) * 7) % 40) + 5,
           size: value.size || ((hashCode(key) * 3) % 8) + 14,
@@ -43,7 +45,6 @@ const DuaPrayerApp = () => {
     return () => unsubscribe();
   }, []);
 
-  // Simple hash function to generate consistent positions from ID
   const hashCode = (str) => {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
@@ -82,10 +83,10 @@ const DuaPrayerApp = () => {
     if (!prayer.trim()) return;
 
     setIsSending(true);
+    setShowInputModal(false);
     createParticles();
     setCurrentBlessing(blessings[Math.floor(Math.random() * blessings.length)]);
 
-    // Save to Firebase with position data
     try {
       const duasRef = ref(database, 'duas');
       await push(duasRef, {
@@ -113,6 +114,7 @@ const DuaPrayerApp = () => {
   };
 
   const handleStarClick = (e, star) => {
+    if (draggedStar) return;
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
 
@@ -133,8 +135,36 @@ const DuaPrayerApp = () => {
           setTappedStar(null);
           setHoveredStar(null);
         }
-      }, 3000);
+      }, 5000);
     }
+  };
+
+  // Drag handlers for stars
+  const handleDragStart = (e, star) => {
+    e.stopPropagation();
+    setDraggedStar(star.id);
+    setHoveredStar(null);
+    setTappedStar(null);
+  };
+
+  const handleDrag = (e, star) => {
+    if (draggedStar !== star.id) return;
+    e.preventDefault();
+
+    const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
+    const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
+
+    const newX = (clientX / window.innerWidth) * 100;
+    const newY = (clientY / window.innerHeight) * 100;
+
+    setStarPositions(prev => ({
+      ...prev,
+      [star.id]: { x: Math.max(2, Math.min(95, newX)), y: Math.max(2, Math.min(70, newY)) }
+    }));
+  };
+
+  const handleDragEnd = () => {
+    setDraggedStar(null);
   };
 
   const handleBackgroundClick = () => {
@@ -142,18 +172,26 @@ const DuaPrayerApp = () => {
     setHoveredStar(null);
   };
 
-  const StarShape = ({ size, isHovered }) => (
+  const getStarPosition = (star) => {
+    if (starPositions[star.id]) {
+      return starPositions[star.id];
+    }
+    return { x: star.x, y: star.y };
+  };
+
+  const StarShape = ({ size, isHovered, isDragging }) => (
     <svg
       width={size}
       height={size}
       viewBox="0 0 24 24"
       fill="url(#starGradient)"
       style={{
-        filter: isHovered
+        filter: isHovered || isDragging
           ? 'drop-shadow(0 0 12px rgba(251,191,36,0.8)) drop-shadow(0 0 25px rgba(251,191,36,0.5))'
           : 'drop-shadow(0 0 6px rgba(251,191,36,0.6)) drop-shadow(0 0 12px rgba(251,191,36,0.3))',
-        transition: 'all 0.3s ease',
-        transform: isHovered ? 'scale(1.3)' : 'scale(1)'
+        transition: isDragging ? 'none' : 'all 0.3s ease',
+        transform: isHovered ? 'scale(1.3)' : 'scale(1)',
+        cursor: 'grab'
       }}
     >
       <defs>
@@ -171,6 +209,10 @@ const DuaPrayerApp = () => {
     <div
       className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden"
       onClick={handleBackgroundClick}
+      onMouseMove={(e) => draggedStar && handleDrag(e, { id: draggedStar })}
+      onMouseUp={handleDragEnd}
+      onTouchMove={(e) => draggedStar && handleDrag(e, { id: draggedStar })}
+      onTouchEnd={handleDragEnd}
     >
 
       {/* Star Counter */}
@@ -184,6 +226,19 @@ const DuaPrayerApp = () => {
         <span className="text-amber-400 text-lg">⭐</span>
         <span className="text-amber-100 text-sm font-light">{totalDuas} duas</span>
       </div>
+
+      {/* Drag hint - show briefly */}
+      {hasSubmittedFirst && !showInputModal && (
+        <div className="fixed top-4 left-4 z-30 px-3 py-2 rounded-full"
+          style={{
+            background: 'linear-gradient(135deg, rgba(15,23,42,0.9) 0%, rgba(30,27,75,0.9) 100%)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(251,191,36,0.2)',
+          }}
+        >
+          <span className="text-amber-100/70 text-xs font-light">✨ Drag stars to move them</span>
+        </div>
+      )}
 
       {/* Animated Galaxy Background */}
       <div className="absolute inset-0 overflow-hidden">
@@ -275,90 +330,90 @@ const DuaPrayerApp = () => {
           />
         ))}
 
-        {/* DUA STARS from Firebase */}
-        {duaStars.map((star) => (
-          <div
-            key={star.id}
-            className="absolute cursor-pointer group"
-            style={{
-              top: star.y + '%',
-              left: star.x + '%',
-              zIndex: 20,
-              animation: `duaStarTwinkle ${2 + star.delay}s ease-in-out infinite`,
-              animationDelay: star.delay + 's',
-              padding: '8px',
-              margin: '-8px'
-            }}
-            onMouseEnter={() => setHoveredStar(star.id)}
-            onMouseLeave={() => {
-              if (tappedStar !== star.id) setHoveredStar(null);
-            }}
-            onClick={(e) => handleStarClick(e, star)}
-          >
+        {/* DUA STARS - Draggable */}
+        {duaStars.map((star) => {
+          const pos = getStarPosition(star);
+          const isDragging = draggedStar === star.id;
+          return (
             <div
-              className="absolute rounded-full transition-all duration-300"
+              key={star.id}
+              className="absolute cursor-grab active:cursor-grabbing"
               style={{
-                width: star.size * 2.5 + 'px',
-                height: star.size * 2.5 + 'px',
-                top: '50%',
-                left: '50%',
-                transform: 'translate(-50%, -50%)',
-                background: hoveredStar === star.id
-                  ? 'radial-gradient(circle, rgba(251,191,36,0.5) 0%, rgba(251,191,36,0.2) 40%, transparent 70%)'
-                  : 'radial-gradient(circle, rgba(251,191,36,0.25) 0%, transparent 60%)',
-                filter: 'blur(4px)',
-                opacity: hoveredStar === star.id ? 1 : 0.7
+                top: pos.y + '%',
+                left: pos.x + '%',
+                zIndex: isDragging ? 100 : (hoveredStar === star.id ? 50 : 20),
+                animation: isDragging ? 'none' : `duaStarTwinkle ${2 + star.delay}s ease-in-out infinite`,
+                animationDelay: star.delay + 's',
+                padding: '12px',
+                margin: '-12px',
+                touchAction: 'none',
+                userSelect: 'none'
               }}
-            />
-
-            <div className="relative transition-all duration-300">
-              <StarShape size={star.size} isHovered={hoveredStar === star.id} />
-            </div>
-
-            {hoveredStar === star.id && (
+              onMouseEnter={() => !draggedStar && setHoveredStar(star.id)}
+              onMouseLeave={() => {
+                if (!draggedStar && tappedStar !== star.id) setHoveredStar(null);
+              }}
+              onClick={(e) => handleStarClick(e, star)}
+              onMouseDown={(e) => handleDragStart(e, star)}
+              onTouchStart={(e) => handleDragStart(e, star)}
+            >
               <div
-                className="absolute z-50 pointer-events-none"
+                className="absolute rounded-full transition-all duration-300"
                 style={{
-                  bottom: '100%',
+                  width: star.size * 2.5 + 'px',
+                  height: star.size * 2.5 + 'px',
+                  top: '50%',
                   left: '50%',
-                  transform: 'translateX(-50%)',
-                  marginBottom: '12px',
-                  animation: 'tooltipFadeIn 0.3s ease-out'
+                  transform: 'translate(-50%, -50%)',
+                  background: hoveredStar === star.id || isDragging
+                    ? 'radial-gradient(circle, rgba(251,191,36,0.5) 0%, rgba(251,191,36,0.2) 40%, transparent 70%)'
+                    : 'radial-gradient(circle, rgba(251,191,36,0.25) 0%, transparent 60%)',
+                  filter: 'blur(4px)',
+                  opacity: hoveredStar === star.id || isDragging ? 1 : 0.7
                 }}
-              >
+              />
+
+              <div className="relative transition-all duration-300">
+                <StarShape size={star.size} isHovered={hoveredStar === star.id} isDragging={isDragging} />
+              </div>
+
+              {/* Tooltip - improved positioning */}
+              {hoveredStar === star.id && !isDragging && (
                 <div
-                  className="relative px-3 py-2 sm:px-4 sm:py-3 rounded-xl text-center"
+                  className="absolute z-50 pointer-events-none"
                   style={{
-                    background: 'linear-gradient(135deg, rgba(15,23,42,0.95) 0%, rgba(30,27,75,0.95) 100%)',
-                    backdropFilter: 'blur(10px)',
-                    border: '1px solid rgba(251,191,36,0.3)',
-                    boxShadow: '0 0 30px 5px rgba(251,191,36,0.15)',
-                    minWidth: '150px',
-                    maxWidth: '250px'
+                    bottom: pos.y > 30 ? '100%' : 'auto',
+                    top: pos.y <= 30 ? '100%' : 'auto',
+                    left: '50%',
+                    transform: `translateX(${pos.x > 70 ? '-80%' : pos.x < 30 ? '-20%' : '-50%'})`,
+                    marginBottom: pos.y > 30 ? '12px' : '0',
+                    marginTop: pos.y <= 30 ? '12px' : '0',
+                    animation: 'tooltipFadeIn 0.3s ease-out'
                   }}
                 >
-                  <p className="text-amber-100 text-xs sm:text-sm font-light leading-relaxed">
-                    "{star.text}"
-                  </p>
-                  <p className="text-amber-400/60 text-xs mt-2">
-                    {tappedStar === star.id ? 'Tap again to say Amin' : 'Click to say Amin'}
-                  </p>
                   <div
-                    className="absolute left-1/2 -bottom-2"
+                    className="relative px-4 py-3 rounded-xl text-center"
                     style={{
-                      transform: 'translateX(-50%)',
-                      width: 0,
-                      height: 0,
-                      borderLeft: '8px solid transparent',
-                      borderRight: '8px solid transparent',
-                      borderTop: '8px solid rgba(30,27,75,0.95)'
+                      background: 'linear-gradient(135deg, rgba(15,23,42,0.98) 0%, rgba(30,27,75,0.98) 100%)',
+                      backdropFilter: 'blur(10px)',
+                      border: '1px solid rgba(251,191,36,0.3)',
+                      boxShadow: '0 0 30px 5px rgba(251,191,36,0.15)',
+                      minWidth: '180px',
+                      maxWidth: '280px'
                     }}
-                  />
+                  >
+                    <p className="text-amber-100 text-sm font-light leading-relaxed whitespace-pre-wrap">
+                      "{star.text}"
+                    </p>
+                    <p className="text-amber-400/60 text-xs mt-2">
+                      {tappedStar === star.id ? 'Tap again to say Amin' : 'Tap to say Amin'}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-        ))}
+              )}
+            </div>
+          );
+        })}
 
         {/* Shooting stars */}
         <div
@@ -452,16 +507,12 @@ const DuaPrayerApp = () => {
         </div>
       )}
 
-      {/* Main content */}
-      <div
-        className={`relative z-10 transition-all duration-700 ease-out ${
-          hasSubmittedFirst
-            ? 'fixed bottom-4 left-4 right-4 sm:bottom-6 sm:left-6 sm:right-auto sm:w-72'
-            : 'w-full max-w-sm sm:max-w-md px-2'
-        }`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {!hasSubmittedFirst && (
+      {/* FIRST TIME: Centered input */}
+      {!hasSubmittedFirst && !isSending && (
+        <div
+          className="relative z-10 w-full max-w-sm sm:max-w-md px-2"
+          onClick={(e) => e.stopPropagation()}
+        >
           <div className="text-center mb-6 sm:mb-8">
             <div className="inline-block mb-2 sm:mb-3">
               <span className="text-4xl sm:text-5xl" style={{ filter: 'drop-shadow(0 0 20px rgba(251,191,36,0.3))' }}>🤲🏼</span>
@@ -470,115 +521,174 @@ const DuaPrayerApp = () => {
             <p className="text-slate-400 text-xs sm:text-sm font-light tracking-wide">Send your prayers to the heavens</p>
             <p className="text-slate-500 text-xs font-light tracking-wide mt-1">Tap on stars to read duas from others</p>
           </div>
-        )}
 
-        <div
-          className={`backdrop-blur-md border border-slate-700/50 shadow-2xl transition-all duration-500 ${
-            isSending ? 'opacity-40 scale-95' : ''
-          } ${hasSubmittedFirst ? 'rounded-xl p-3 sm:p-4' : 'rounded-2xl p-4 sm:p-6'}`}
-          style={{
-            background: 'linear-gradient(135deg, rgba(15,23,42,0.8) 0%, rgba(30,27,75,0.6) 100%)'
-          }}
-        >
-          {hasSubmittedFirst && (
-            <div className="flex items-center gap-2 mb-2 sm:mb-3">
-              <span className="text-lg sm:text-xl">🤲🏼</span>
-              <span className="text-white text-xs sm:text-sm font-light">New Dua</span>
-            </div>
-          )}
+          <div
+            className="backdrop-blur-md border border-slate-700/50 shadow-2xl rounded-2xl p-4 sm:p-6"
+            style={{
+              background: 'linear-gradient(135deg, rgba(15,23,42,0.8) 0%, rgba(30,27,75,0.6) 100%)'
+            }}
+          >
+            <textarea
+              ref={textareaRef}
+              value={prayer}
+              onChange={(e) => setPrayer(e.target.value)}
+              placeholder="Write your dua here..."
+              className="w-full bg-transparent text-white placeholder-slate-500 font-light leading-relaxed resize-none focus:outline-none h-28 sm:h-40 text-base sm:text-lg"
+              style={{ direction: 'auto' }}
+            />
 
-          <textarea
-            ref={textareaRef}
-            value={prayer}
-            onChange={(e) => setPrayer(e.target.value)}
-            placeholder="Write your dua here..."
-            disabled={isSending}
-            className={`w-full bg-transparent text-white placeholder-slate-500 font-light leading-relaxed resize-none focus:outline-none ${
-              hasSubmittedFirst ? 'h-16 sm:h-20 text-sm' : 'h-28 sm:h-40 text-base sm:text-lg'
-            }`}
-            style={{ direction: 'auto' }}
-          />
+            <div className="flex justify-between items-center border-t border-slate-700/50 mt-3 pt-3 sm:mt-4 sm:pt-4">
+              <span className="text-slate-500 text-xs font-light tracking-wide">
+                {prayer.length > 0 ? `${prayer.length}` : ''}
+              </span>
 
-          <div className={`flex justify-between items-center border-t border-slate-700/50 ${
-            hasSubmittedFirst ? 'mt-2 pt-2' : 'mt-3 pt-3 sm:mt-4 sm:pt-4'
-          }`}>
-            <span className="text-slate-500 text-xs font-light tracking-wide">
-              {prayer.length > 0 ? `${prayer.length}` : ''}
-            </span>
-
-            <button
-              onClick={handleSend}
-              disabled={!prayer.trim() || isSending}
-              className={`rounded-full font-light text-xs sm:text-sm tracking-wide transition-all duration-300 ${
-                prayer.trim() && !isSending
-                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 hover:from-amber-400 hover:to-amber-500 active:scale-95 shadow-lg shadow-amber-500/30'
-                  : 'bg-slate-800/50 text-slate-500 cursor-not-allowed'
-              } ${hasSubmittedFirst ? 'px-3 py-1.5 sm:px-4 sm:py-2' : 'px-4 py-2 sm:px-6 sm:py-2.5'}`}
-            >
-              {isSending ? (
-                <span className="flex items-center gap-2">
-                  <svg className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  {!hasSubmittedFirst && <span className="hidden sm:inline">Sending</span>}
-                </span>
-              ) : (
+              <button
+                onClick={handleSend}
+                disabled={!prayer.trim()}
+                className={`rounded-full font-light text-xs sm:text-sm tracking-wide transition-all duration-300 px-4 py-2 sm:px-6 sm:py-2.5 ${
+                  prayer.trim()
+                    ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 hover:from-amber-400 hover:to-amber-500 active:scale-95 shadow-lg shadow-amber-500/30'
+                    : 'bg-slate-800/50 text-slate-500 cursor-not-allowed'
+                }`}
+              >
                 <span className="flex items-center gap-1.5 sm:gap-2">
-                  {hasSubmittedFirst ? 'Send' : 'Send Dua'}
+                  Send Dua
                   <svg className="w-3 h-3 sm:w-4 sm:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
                   </svg>
                 </span>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Blessing popup */}
-        {showBlessing && (
-          <div
-            className="fixed inset-0 flex items-center justify-center z-50 p-4"
-            style={{ animation: 'fadeIn 0.6s ease-out' }}
-          >
-            <div
-              className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
-              style={{ animation: 'fadeIn 0.3s ease-out' }}
-            />
-            <div
-              className="relative backdrop-blur-md border border-amber-500/30 rounded-2xl sm:rounded-3xl p-6 sm:p-10 max-w-xs sm:max-w-sm mx-4 text-center shadow-2xl"
-              style={{
-                background: 'linear-gradient(135deg, rgba(15,23,42,0.95) 0%, rgba(30,27,75,0.9) 100%)',
-                boxShadow: '0 0 60px 20px rgba(251,191,36,0.15)',
-                animation: 'scaleIn 0.6s ease-out'
-              }}
-            >
-              <div
-                className="text-5xl sm:text-6xl mb-4 sm:mb-6"
-                style={{
-                  filter: 'drop-shadow(0 0 30px rgba(251,191,36,0.5))',
-                  animation: 'gentlePulse 2s ease-in-out infinite'
-                }}
-              >
-                🤲🏼
-              </div>
-              <p className="text-amber-100 text-lg sm:text-xl font-light leading-relaxed tracking-wide">
-                {currentBlessing}
-              </p>
-              <p className="text-amber-400/70 text-base sm:text-lg mt-4 sm:mt-5 font-light">آمين</p>
-              <p className="text-slate-500 text-xs mt-3 sm:mt-4 font-light">Your dua is now a star in the sky ✨</p>
+              </button>
             </div>
           </div>
-        )}
 
-        {!hasSubmittedFirst && (
           <p className="text-center text-slate-600 text-xs mt-6 sm:mt-8 font-light tracking-wide leading-relaxed px-4">
             "And your Lord says, 'Call upon Me; I will respond to you.'"
             <br />
             <span className="text-slate-500">— Quran 40:60</span>
           </p>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* AFTER FIRST SEND: Plus button in bottom left */}
+      {hasSubmittedFirst && !showInputModal && !isSending && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowInputModal(true);
+          }}
+          className="fixed bottom-6 left-6 z-40 w-14 h-14 rounded-full flex items-center justify-center transition-all duration-300 active:scale-95"
+          style={{
+            background: 'linear-gradient(135deg, rgba(251,191,36,1) 0%, rgba(245,158,11,1) 100%)',
+            boxShadow: '0 0 30px 5px rgba(251,191,36,0.4), 0 4px 15px rgba(0,0,0,0.3)'
+          }}
+        >
+          <svg className="w-7 h-7 text-slate-900" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+        </button>
+      )}
+
+      {/* Modal for adding new dua */}
+      {showInputModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          onClick={() => setShowInputModal(false)}
+          style={{ animation: 'fadeIn 0.3s ease-out' }}
+        >
+          <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm" />
+          <div
+            className="relative w-full max-w-sm"
+            onClick={(e) => e.stopPropagation()}
+            style={{ animation: 'scaleIn 0.3s ease-out' }}
+          >
+            <div
+              className="backdrop-blur-md border border-slate-700/50 shadow-2xl rounded-2xl p-4 sm:p-5"
+              style={{
+                background: 'linear-gradient(135deg, rgba(15,23,42,0.95) 0%, rgba(30,27,75,0.9) 100%)'
+              }}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🤲🏼</span>
+                  <span className="text-white text-sm font-light">New Dua</span>
+                </div>
+                <button
+                  onClick={() => setShowInputModal(false)}
+                  className="text-slate-400 hover:text-white transition-colors p-1"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <textarea
+                autoFocus
+                value={prayer}
+                onChange={(e) => setPrayer(e.target.value)}
+                placeholder="Write your dua here..."
+                className="w-full bg-transparent text-white placeholder-slate-500 font-light leading-relaxed resize-none focus:outline-none h-24 text-sm"
+                style={{ direction: 'auto' }}
+              />
+
+              <div className="flex justify-end mt-3 pt-3 border-t border-slate-700/50">
+                <button
+                  onClick={handleSend}
+                  disabled={!prayer.trim()}
+                  className={`rounded-full font-light text-xs tracking-wide transition-all duration-300 px-4 py-2 ${
+                    prayer.trim()
+                      ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 hover:from-amber-400 hover:to-amber-500 active:scale-95 shadow-lg shadow-amber-500/30'
+                      : 'bg-slate-800/50 text-slate-500 cursor-not-allowed'
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5">
+                    Send
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                    </svg>
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Blessing popup */}
+      {showBlessing && (
+        <div
+          className="fixed inset-0 flex items-center justify-center z-50 p-4"
+          style={{ animation: 'fadeIn 0.6s ease-out' }}
+        >
+          <div
+            className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
+            style={{ animation: 'fadeIn 0.3s ease-out' }}
+          />
+          <div
+            className="relative backdrop-blur-md border border-amber-500/30 rounded-2xl sm:rounded-3xl p-6 sm:p-10 max-w-xs sm:max-w-sm mx-4 text-center shadow-2xl"
+            style={{
+              background: 'linear-gradient(135deg, rgba(15,23,42,0.95) 0%, rgba(30,27,75,0.9) 100%)',
+              boxShadow: '0 0 60px 20px rgba(251,191,36,0.15)',
+              animation: 'scaleIn 0.6s ease-out'
+            }}
+          >
+            <div
+              className="text-5xl sm:text-6xl mb-4 sm:mb-6"
+              style={{
+                filter: 'drop-shadow(0 0 30px rgba(251,191,36,0.5))',
+                animation: 'gentlePulse 2s ease-in-out infinite'
+              }}
+            >
+              🤲🏼
+            </div>
+            <p className="text-amber-100 text-lg sm:text-xl font-light leading-relaxed tracking-wide">
+              {currentBlessing}
+            </p>
+            <p className="text-amber-400/70 text-base sm:text-lg mt-4 sm:mt-5 font-light">آمين</p>
+            <p className="text-slate-500 text-xs mt-3 sm:mt-4 font-light">Your dua is now a star in the sky ✨</p>
+          </div>
+        </div>
+      )}
 
       {/* Animations */}
       <style>{`
