@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { database, ref, push, onValue } from './firebase';
 
 const DuaPrayerApp = () => {
   const [prayer, setPrayer] = useState('');
@@ -9,23 +10,48 @@ const DuaPrayerApp = () => {
   const [aminPosition, setAminPosition] = useState({ x: 0, y: 0 });
   const [hasSubmittedFirst, setHasSubmittedFirst] = useState(false);
   const [tappedStar, setTappedStar] = useState(null);
+  const [duaStars, setDuaStars] = useState([]);
+  const [hoveredStar, setHoveredStar] = useState(null);
+  const [totalDuas, setTotalDuas] = useState(0);
   const textareaRef = useRef(null);
 
-  // Sample anonymous duas that appear as stars - adjusted positions for mobile
-  const [duaStars, setDuaStars] = useState([
-    { id: 1, text: "Ya Allah, grant my parents Jannah", x: 12, y: 8, size: 18, delay: 0 },
-    { id: 2, text: "May Allah heal those who are suffering", x: 78, y: 15, size: 16, delay: 0.5 },
-    { id: 3, text: "O Allah, guide me to the straight path", x: 22, y: 25, size: 20, delay: 1 },
-    { id: 4, text: "Ya Rabb, bless my family with peace", x: 65, y: 6, size: 15, delay: 1.5 },
-    { id: 5, text: "Allah, forgive my sins and have mercy on me", x: 88, y: 32, size: 17, delay: 2 },
-    { id: 6, text: "May Allah grant success to all students", x: 45, y: 12, size: 16, delay: 0.3 },
-    { id: 7, text: "Ya Allah, ease the hardships of the ummah", x: 8, y: 38, size: 18, delay: 1.2 },
-    { id: 8, text: "O Allah, protect us from harm", x: 72, y: 42, size: 15, delay: 0.8 },
-    { id: 9, text: "May Allah reunite me with my loved ones", x: 50, y: 4, size: 19, delay: 1.8 },
-    { id: 10, text: "Ya Rabb, grant me patience and gratitude", x: 30, y: 48, size: 16, delay: 0.6 },
-  ]);
+  // Load duas from Firebase on mount - real-time listener
+  useEffect(() => {
+    const duasRef = ref(database, 'duas');
 
-  const [hoveredStar, setHoveredStar] = useState(null);
+    const unsubscribe = onValue(duasRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const duasArray = Object.entries(data).map(([key, value], index) => ({
+          id: key,
+          text: value.text,
+          timestamp: value.timestamp,
+          // Use saved positions, or generate consistent ones based on ID
+          x: value.x || (hashCode(key) % 80) + 5,
+          y: value.y || ((hashCode(key) * 7) % 40) + 5,
+          size: value.size || ((hashCode(key) * 3) % 8) + 14,
+          delay: (index * 0.1) % 3
+        }));
+        setDuaStars(duasArray);
+        setTotalDuas(duasArray.length);
+      } else {
+        setDuaStars([]);
+        setTotalDuas(0);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Simple hash function to generate consistent positions from ID
+  const hashCode = (str) => {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) - hash) + str.charCodeAt(i);
+      hash |= 0;
+    }
+    return Math.abs(hash);
+  };
 
   const blessings = [
     "May Allah bless you and grant you ease",
@@ -52,30 +78,32 @@ const DuaPrayerApp = () => {
     setParticles(newParticles);
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!prayer.trim()) return;
 
     setIsSending(true);
     createParticles();
     setCurrentBlessing(blessings[Math.floor(Math.random() * blessings.length)]);
 
+    // Save to Firebase with position data
+    try {
+      const duasRef = ref(database, 'duas');
+      await push(duasRef, {
+        text: prayer.trim(),
+        timestamp: Date.now(),
+        x: 5 + Math.random() * 80,
+        y: 5 + Math.random() * 40,
+        size: 14 + Math.random() * 8
+      });
+    } catch (error) {
+      console.error('Error saving dua:', error);
+    }
+
     setTimeout(() => {
       setShowBlessing(true);
     }, 1500);
 
     setTimeout(() => {
-      // Add the new prayer as a star
-      const newStar = {
-        id: Date.now(),
-        text: prayer.trim(),
-        x: 10 + Math.random() * 80,
-        y: 5 + Math.random() * 45,
-        size: 15 + Math.random() * 5,
-        delay: 0,
-        isNew: true
-      };
-      setDuaStars(prev => [...prev, newStar]);
-
       setIsSending(false);
       setShowBlessing(false);
       setPrayer('');
@@ -88,7 +116,6 @@ const DuaPrayerApp = () => {
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
 
-    // On mobile, first tap shows tooltip, second tap says Amin
     if (tappedStar === star.id) {
       setAminPosition({
         x: rect.left + rect.width / 2,
@@ -101,7 +128,6 @@ const DuaPrayerApp = () => {
     } else {
       setTappedStar(star.id);
       setHoveredStar(star.id);
-      // Auto-hide tooltip after 3 seconds on mobile
       setTimeout(() => {
         if (tappedStar === star.id) {
           setTappedStar(null);
@@ -111,13 +137,11 @@ const DuaPrayerApp = () => {
     }
   };
 
-  // Close tooltip when tapping elsewhere
   const handleBackgroundClick = () => {
     setTappedStar(null);
     setHoveredStar(null);
   };
 
-  // Star shape SVG component
   const StarShape = ({ size, isHovered }) => (
     <svg
       width={size}
@@ -149,12 +173,22 @@ const DuaPrayerApp = () => {
       onClick={handleBackgroundClick}
     >
 
+      {/* Star Counter */}
+      <div className="fixed top-4 right-4 z-30 flex items-center gap-2 px-3 py-2 rounded-full"
+        style={{
+          background: 'linear-gradient(135deg, rgba(15,23,42,0.9) 0%, rgba(30,27,75,0.9) 100%)',
+          backdropFilter: 'blur(10px)',
+          border: '1px solid rgba(251,191,36,0.3)',
+        }}
+      >
+        <span className="text-amber-400 text-lg">⭐</span>
+        <span className="text-amber-100 text-sm font-light">{totalDuas} duas</span>
+      </div>
+
       {/* Animated Galaxy Background */}
       <div className="absolute inset-0 overflow-hidden">
-        {/* Base gradient */}
         <div className="absolute inset-0 bg-gradient-to-b from-slate-950 via-indigo-950/50 to-slate-950" />
 
-        {/* Rotating galaxy core - smaller on mobile */}
         <div
           className="absolute top-1/2 left-1/2 w-[400px] h-[400px] sm:w-[800px] sm:h-[800px]"
           style={{
@@ -162,7 +196,6 @@ const DuaPrayerApp = () => {
             animation: 'rotateGalaxy 120s linear infinite'
           }}
         >
-          {/* Galaxy spiral arms */}
           <div
             className="absolute inset-0 rounded-full"
             style={{
@@ -188,7 +221,6 @@ const DuaPrayerApp = () => {
             }}
           />
 
-          {/* Inner galaxy glow */}
           <div
             className="absolute top-1/2 left-1/2 w-[150px] h-[150px] sm:w-[300px] sm:h-[300px] rounded-full"
             style={{
@@ -200,7 +232,6 @@ const DuaPrayerApp = () => {
           />
         </div>
 
-        {/* Floating nebula clouds - smaller on mobile */}
         <div
           className="absolute top-[20%] left-[5%] w-[200px] h-[200px] sm:w-[400px] sm:h-[400px] rounded-full opacity-30"
           style={{
@@ -226,7 +257,7 @@ const DuaPrayerApp = () => {
           }}
         />
 
-        {/* Small decorative stars (non-interactive) - fewer on mobile */}
+        {/* Small decorative stars */}
         {[...Array(50)].map((_, i) => (
           <div
             key={`bg-star-${i}`}
@@ -244,7 +275,7 @@ const DuaPrayerApp = () => {
           />
         ))}
 
-        {/* DUA STARS - Interactive twinkling stars with prayers */}
+        {/* DUA STARS from Firebase */}
         {duaStars.map((star) => (
           <div
             key={star.id}
@@ -255,7 +286,6 @@ const DuaPrayerApp = () => {
               zIndex: 20,
               animation: `duaStarTwinkle ${2 + star.delay}s ease-in-out infinite`,
               animationDelay: star.delay + 's',
-              // Larger touch target on mobile
               padding: '8px',
               margin: '-8px'
             }}
@@ -265,7 +295,6 @@ const DuaPrayerApp = () => {
             }}
             onClick={(e) => handleStarClick(e, star)}
           >
-            {/* Star glow effect */}
             <div
               className="absolute rounded-full transition-all duration-300"
               style={{
@@ -282,12 +311,10 @@ const DuaPrayerApp = () => {
               }}
             />
 
-            {/* Star shape */}
             <div className="relative transition-all duration-300">
               <StarShape size={star.size} isHovered={hoveredStar === star.id} />
             </div>
 
-            {/* Tooltip on hover/tap */}
             {hoveredStar === star.id && (
               <div
                 className="absolute z-50 pointer-events-none"
@@ -316,7 +343,6 @@ const DuaPrayerApp = () => {
                   <p className="text-amber-400/60 text-xs mt-2">
                     {tappedStar === star.id ? 'Tap again to say Amin' : 'Click to say Amin'}
                   </p>
-                  {/* Tooltip arrow */}
                   <div
                     className="absolute left-1/2 -bottom-2"
                     style={{
@@ -357,7 +383,7 @@ const DuaPrayerApp = () => {
         />
       </div>
 
-      {/* Amin popup - appears where clicked */}
+      {/* Amin popup */}
       {showAmin && (
         <div
           className="fixed z-50 pointer-events-none"
@@ -387,7 +413,6 @@ const DuaPrayerApp = () => {
       {/* Rising light animation */}
       {isSending && (
         <div className="absolute inset-0 pointer-events-none">
-          {/* Main light beam */}
           <div
             className="absolute left-1/2 bottom-1/3 w-2 rounded-full"
             style={{
@@ -399,7 +424,6 @@ const DuaPrayerApp = () => {
             }}
           />
 
-          {/* Expanding glow ring */}
           <div
             className="absolute left-1/2 bottom-1/3 w-24 h-24 sm:w-40 sm:h-40 rounded-full"
             style={{
@@ -409,7 +433,6 @@ const DuaPrayerApp = () => {
             }}
           />
 
-          {/* Floating light particles */}
           {particles.map((p) => (
             <div
               key={p.id}
@@ -429,7 +452,7 @@ const DuaPrayerApp = () => {
         </div>
       )}
 
-      {/* Main content - Full size initially, smaller after first submission */}
+      {/* Main content */}
       <div
         className={`relative z-10 transition-all duration-700 ease-out ${
           hasSubmittedFirst
@@ -438,7 +461,6 @@ const DuaPrayerApp = () => {
         }`}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header - Only show before first submission */}
         {!hasSubmittedFirst && (
           <div className="text-center mb-6 sm:mb-8">
             <div className="inline-block mb-2 sm:mb-3">
@@ -446,11 +468,10 @@ const DuaPrayerApp = () => {
             </div>
             <h1 className="text-2xl sm:text-3xl font-light text-white tracking-wider mb-2">Dua</h1>
             <p className="text-slate-400 text-xs sm:text-sm font-light tracking-wide">Send your prayers to the heavens</p>
-            <p className="text-slate-500 text-xs font-light tracking-wide mt-1">Tap on stars to read duas</p>
+            <p className="text-slate-500 text-xs font-light tracking-wide mt-1">Tap on stars to read duas from others</p>
           </div>
         )}
 
-        {/* Prayer input card */}
         <div
           className={`backdrop-blur-md border border-slate-700/50 shadow-2xl transition-all duration-500 ${
             isSending ? 'opacity-40 scale-95' : ''
@@ -459,7 +480,6 @@ const DuaPrayerApp = () => {
             background: 'linear-gradient(135deg, rgba(15,23,42,0.8) 0%, rgba(30,27,75,0.6) 100%)'
           }}
         >
-          {/* Mini header for compact mode */}
           {hasSubmittedFirst && (
             <div className="flex items-center gap-2 mb-2 sm:mb-3">
               <span className="text-lg sm:text-xl">🤲🏼</span>
@@ -546,12 +566,11 @@ const DuaPrayerApp = () => {
                 {currentBlessing}
               </p>
               <p className="text-amber-400/70 text-base sm:text-lg mt-4 sm:mt-5 font-light">آمين</p>
-              <p className="text-slate-500 text-xs mt-3 sm:mt-4 font-light">Your dua will become a star ✨</p>
+              <p className="text-slate-500 text-xs mt-3 sm:mt-4 font-light">Your dua is now a star in the sky ✨</p>
             </div>
           </div>
         )}
 
-        {/* Footer - Only show before first submission */}
         {!hasSubmittedFirst && (
           <p className="text-center text-slate-600 text-xs mt-6 sm:mt-8 font-light tracking-wide leading-relaxed px-4">
             "And your Lord says, 'Call upon Me; I will respond to you.'"
@@ -644,24 +663,6 @@ const DuaPrayerApp = () => {
         @keyframes gentlePulse {
           0%, 100% { transform: scale(1); }
           50% { transform: scale(1.08); }
-        }
-
-        @keyframes moonFloat {
-          0%, 100% { transform: translateY(0) rotate(0deg); }
-          50% { transform: translateY(-8px) rotate(2deg); }
-        }
-
-        @keyframes moonGlow {
-          0%, 100% { opacity: 0.8; transform: scale(1.8); }
-          50% { opacity: 1; transform: scale(2); }
-        }
-
-        @keyframes moonParticle {
-          0%, 100% { transform: translate(0, 0); opacity: 0; }
-          20% { opacity: 0.8; }
-          50% { transform: translate(-15px, -20px); opacity: 0.6; }
-          80% { opacity: 0.3; }
-          100% { transform: translate(-25px, -35px); opacity: 0; }
         }
 
         @keyframes tooltipFadeIn {
